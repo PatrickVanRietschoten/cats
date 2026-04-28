@@ -182,6 +182,7 @@ async function callTool(ctx: McpContext, name: string, args: Record<string, unkn
     case "log_activity":
       return content(await logActivity(ctx, args));
     case "add_cat":
+      await _addCatGuard(ctx);
       return content(await addCat(ctx, args));
     default:
       throw new Error(`Unknown tool: ${name}`);
@@ -205,6 +206,10 @@ async function listCats(ctx: McpContext) {
   return { cats: cats.map(serializeCat) };
 }
 
+async function _addCatGuard(ctx: McpContext) {
+  if (ctx.catId) throw new Error("add_cat is not allowed on a per-cat endpoint; use the all-cats endpoint.");
+}
+
 function serializeCat(c: typeof schema.cats.$inferSelect) {
   return {
     id: c.id,
@@ -219,7 +224,11 @@ function serializeCat(c: typeof schema.cats.$inferSelect) {
 
 async function listLogs(ctx: McpContext, args: Record<string, unknown>) {
   const limit = clampInt(args.limit, 100, 1, 500);
-  const filterCat = (args.cat_id as string | undefined) ?? ctx.catId;
+  // Per-cat endpoint locks the cat scope. Reject overrides explicitly.
+  if (ctx.catId && args.cat_id && args.cat_id !== ctx.catId) {
+    throw new Error("This endpoint is scoped to a single cat; remove cat_id or use the all-cats endpoint.");
+  }
+  const filterCat = ctx.catId ?? (args.cat_id as string | undefined);
   const slug = args.activity_slug as string | undefined;
   const since = args.since as string | undefined;
 
@@ -254,7 +263,10 @@ async function listLogs(ctx: McpContext, args: Record<string, unknown>) {
 }
 
 async function logActivity(ctx: McpContext, args: Record<string, unknown>) {
-  const catId = (args.cat_id as string | undefined) ?? ctx.catId;
+  if (ctx.catId && args.cat_id && args.cat_id !== ctx.catId) {
+    throw new Error("This endpoint is scoped to a single cat; remove cat_id or use the all-cats endpoint.");
+  }
+  const catId = ctx.catId ?? (args.cat_id as string | undefined);
   const slug = args.activity_slug as string | undefined;
   if (!catId) throw new Error("cat_id is required (or use a per-cat endpoint)");
   if (!slug) throw new Error("activity_slug is required");

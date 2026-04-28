@@ -224,7 +224,10 @@ export function LitterApp(props: Props) {
                 });
                 setHi5(Date.now());
                 setSavedToast(BUILTIN_BY_SLUG[sheetSlug].label);
-                setTimeout(() => setSavedToast(null), 1400);
+                setTimeout(() => {
+                  setSavedToast(null);
+                  setHi5(null);
+                }, 1400);
                 setSheetSlug(null);
               }}
             />
@@ -360,7 +363,7 @@ function HomeView({
   return (
     <div style={{ padding: "14px 16px 96px", display: "flex", flexDirection: "column", gap: 22 }}>
       <section>
-        <SectionHd kicker="Quick log" hint={`${cat.name}'s most-used`} />
+        <SectionHd kicker="Quick log" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
           {topActivitySlugs.map((slug) => {
             const a = BUILTIN_BY_SLUG[slug];
@@ -406,6 +409,8 @@ function SectionHd({ kicker, hint }: { kicker: string; hint?: string }) {
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            minWidth: 0,
+            textAlign: "right",
           }}
         >
           {hint}
