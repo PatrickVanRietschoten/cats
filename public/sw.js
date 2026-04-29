@@ -1,10 +1,10 @@
-// Minimal app-shell service worker. Caches the shell + static assets, lets
-// API/MCP requests hit the network always.
-const CACHE = "cats-shell-v1";
-const SHELL = ["/", "/login", "/icon.svg", "/manifest.webmanifest"];
+// App-shell SW. Static assets are cached; HTML and any per-user data go to the
+// network so a window.location.reload() after a write picks up the fresh state.
+const CACHE = "cats-shell-v2";
+const STATIC = ["/icon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(STATIC)).catch(() => {}));
   self.skipWaiting();
 });
 
@@ -19,15 +19,20 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // Don't cache API or MCP routes — always live.
+  // API, MCP, auth — always live, no SW.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/mcp/") || url.pathname.startsWith("/auth/")) return;
-  // Stale-while-revalidate for shell.
+  // Document navigations (HTML pages) and RSC requests — always live so writes
+  // are reflected immediately after window.location.reload().
+  if (req.mode === "navigate" || req.destination === "document") return;
+  if (req.headers.get("accept")?.includes("text/html")) return;
+  if (req.headers.get("rsc") || req.headers.get("next-router-state-tree")) return;
+  // Cache static assets only.
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const cached = await cache.match(req);
       const fetched = fetch(req)
         .then((res) => {
-          if (res.ok && (req.url.startsWith(self.location.origin))) cache.put(req, res.clone()).catch(() => {});
+          if (res.ok && req.url.startsWith(self.location.origin)) cache.put(req, res.clone()).catch(() => {});
           return res;
         })
         .catch(() => cached);

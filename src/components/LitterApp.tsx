@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   BUILTIN_ACTIVITIES,
   BUILTIN_BY_SLUG,
@@ -1324,6 +1325,7 @@ function IntegrationsScreen({
   const live = tokens.find((t) => !t.revokedAt);
   const [copied, setCopied] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const router = useRouter();
 
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/mcp/${household.id}` : `/mcp/${household.id}`;
   const tokenStr = live ? `?token=${live.token}` : "?token=YOUR_TOKEN";
@@ -1345,7 +1347,7 @@ function IntegrationsScreen({
 
       {!live && (
         <button
-          onClick={() => start(async () => { await createMcpTokenAction(); window.location.reload(); })}
+          onClick={() => start(async () => { await createMcpTokenAction(); router.refresh(); })}
           disabled={pending}
           style={{
             width: "100%",
@@ -1437,7 +1439,7 @@ function IntegrationsScreen({
                 onClick={() => start(async () => {
                   await revokeMcpTokenAction(live.id);
                   await createMcpTokenAction();
-                  window.location.reload();
+                  router.refresh();
                 })}
                 style={btnSecondary("var(--rule)")}
               >
@@ -1446,7 +1448,7 @@ function IntegrationsScreen({
               <button
                 onClick={() => start(async () => {
                   await revokeMcpTokenAction(live.id);
-                  window.location.reload();
+                  router.refresh();
                 })}
                 style={btnSecondary("var(--bad)", "var(--bad)")}
               >
@@ -1582,6 +1584,7 @@ function AddCatScreen({ onBack }: { onBack: () => void }) {
   const [photoUrl, setPhotoUrl] = useState<string | undefined>();
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   async function uploadPhoto(file: File) {
     setUploading(true);
@@ -1603,7 +1606,11 @@ function AddCatScreen({ onBack }: { onBack: () => void }) {
         action={(fd) => start(async () => {
           if (photoUrl) fd.set("photoUrl", photoUrl);
           await addCatAction(fd);
-          window.location.reload();
+          // router.refresh re-renders with the new cats list and keeps client
+          // state (theme, active cat, scroll). Avoids a full reload that the
+          // PWA shell could intercept and serve stale.
+          router.refresh();
+          onBack();
         })}
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
