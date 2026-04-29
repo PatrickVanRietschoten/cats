@@ -118,9 +118,11 @@ export const logs = pgTable(
     happenedAt: timestamp("happened_at", { withTimezone: true }).notNull(),
     note: text("note"),
     data: jsonb("data").$type<Record<string, unknown>>().default({}).notNull(),
-    photoUrl: text("photo_url"),
-    fileUrl: text("file_url"),
+    photoUrl: text("photo_url"), // legacy single attachment — first of `photos` for backwards compat
+    fileUrl: text("file_url"),   // legacy single file — first of `files` for backwards compat
     fileName: text("file_name"),
+    photos: jsonb("photos").$type<string[]>().default([]).notNull(),
+    files: jsonb("files").$type<{ url: string; name: string }[]>().default([]).notNull(),
     createdById: uuid("created_by_id").references(() => users.id),
     createdByLabel: text("created_by_label"), // cached for display
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

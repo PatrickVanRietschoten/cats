@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   BUILTIN_ACTIVITIES,
   BUILTIN_BY_SLUG,
@@ -22,6 +22,7 @@ import { CatAvatar } from "./CatAvatar";
 import { HighFiveBurst } from "./HighFiveBurst";
 import { PawMark } from "./PawMark";
 import { LogSheet } from "./LogSheet";
+import { deriveThemeVars } from "@/lib/theme";
 
 interface CatRow {
   id: string;
@@ -42,9 +43,8 @@ interface LogRow {
   happenedAt: string;
   note: string | null;
   data: Record<string, unknown>;
-  photoUrl: string | null;
-  fileUrl: string | null;
-  fileName: string | null;
+  photos: string[];
+  files: { url: string; name: string }[];
   createdByLabel: string | null;
 }
 
@@ -118,9 +118,21 @@ export function LitterApp(props: Props) {
   }
 
   const themeStyles = useMemo<React.CSSProperties>(
-    () => ({ ["--accent" as string]: accentLocal }),
+    () => deriveThemeVars(accentLocal),
     [accentLocal],
   );
+
+  // Mirror theme vars onto :root so body bg, scrollbar gutter, and any
+  // out-of-container UI (the area outside the max-width column on desktop)
+  // also pick up the chosen accent.
+  useEffect(() => {
+    const root = document.documentElement;
+    const entries = Object.entries(themeStyles) as [string, string][];
+    for (const [k, v] of entries) root.style.setProperty(k, String(v));
+    return () => {
+      for (const [k] of entries) root.style.removeProperty(k);
+    };
+  }, [themeStyles]);
 
   if (!activeCat) {
     return (
@@ -132,110 +144,247 @@ export function LitterApp(props: Props) {
 
   const titleMap = { home: "Today", history: "History", profile: activeCat.name, settings: "Settings" };
 
+  const subContent = subView === "addcat" ? (
+    <AddCatScreen onBack={() => setSubView(null)} />
+  ) : subView === "appearance" ? (
+    <AppearanceScreen
+      current={accentLocal}
+      onPick={(v) => setAccentLocal(v)}
+      settings={settings}
+      onBack={() => setSubView(null)}
+    />
+  ) : subView === "integrations" ? (
+    <IntegrationsScreen
+      household={household}
+      cats={cats}
+      tokens={mcpTokens}
+      onBack={() => setSubView(null)}
+    />
+  ) : subView === "members" ? (
+    <MembersScreen
+      household={household}
+      members={members}
+      onBack={() => setSubView(null)}
+    />
+  ) : null;
+
   return (
     <div
+      className="app-shell"
       style={{
         ...themeStyles,
-        minHeight: "100dvh",
-        display: "flex",
-        flexDirection: "column",
         background: "var(--bg)",
         color: "var(--ink)",
-        position: "relative",
-        maxWidth: 720,
-        margin: "0 auto",
       }}
     >
-      {subView === "addcat" ? (
-        <AddCatScreen onBack={() => setSubView(null)} />
-      ) : subView === "appearance" ? (
-        <AppearanceScreen
-          current={accentLocal}
-          onPick={(v) => setAccentLocal(v)}
-          settings={settings}
-          onBack={() => setSubView(null)}
-        />
-      ) : subView === "integrations" ? (
-        <IntegrationsScreen
-          household={household}
-          cats={cats}
-          tokens={mcpTokens}
-          onBack={() => setSubView(null)}
-        />
-      ) : subView === "members" ? (
-        <MembersScreen
-          household={household}
-          members={members}
-          onBack={() => setSubView(null)}
-        />
-      ) : (
-        <>
-          <Header
-            title={titleMap[tab]}
-            household={household}
-            cats={cats}
-            activeCatId={activeCat.id}
-            onSwitch={setActiveCatId}
-            onAddCat={() => setSubView("addcat")}
-          />
-          <div style={{ flex: 1, overflow: "auto" }}>
-            {tab === "home" && (
-              <HomeView
-                cat={activeCat}
-                logs={logs}
-                topActivitySlugs={topActivitiesFor(activeCat.id, 6)}
-                allActivities={allActivities}
-                iconStyle={settings.iconStyle as "shape" | "mono" | "filled" | "emoji"}
-                onTile={(slug) => setSheetSlug(slug)}
-              />
-            )}
-            {tab === "history" && (
-              <HistoryView
-                cats={cats}
-                cat={activeCat}
-                logs={logs}
-                iconStyle={settings.iconStyle as "shape" | "mono" | "filled" | "emoji"}
-              />
-            )}
-            {tab === "profile" && <ProfileView cat={activeCat} logs={logs} />}
-            {tab === "settings" && (
-              <SettingsView
-                household={household}
-                user={currentUser}
-                memberCount={members.length}
-                catCount={cats.length}
-                onAppearance={() => setSubView("appearance")}
-                onIntegrations={() => setSubView("integrations")}
-                onMembers={() => setSubView("members")}
-              />
-            )}
-          </div>
-          <TabBar tab={tab} setTab={setTab} />
-          {sheetSlug && (
-            <LogSheet
-              act={BUILTIN_BY_SLUG[sheetSlug]}
-              cat={activeCat}
-              onClose={() => setSheetSlug(null)}
-              onSave={async (entry: { happenedAt?: string; note?: string; data?: Record<string, unknown>; photoUrl?: string; fileUrl?: string; fileName?: string }) => {
-                await logActivityAction({
-                  catId: activeCat.id,
-                  activitySlug: sheetSlug,
-                  ...entry,
-                });
-                setHi5(Date.now());
-                setSavedToast(BUILTIN_BY_SLUG[sheetSlug].label);
-                setTimeout(() => {
-                  setSavedToast(null);
-                  setHi5(null);
-                }, 1400);
-                setSheetSlug(null);
-              }}
+      <DesktopSidebar
+        household={household}
+        cats={cats}
+        activeCatId={activeCat.id}
+        onSwitch={setActiveCatId}
+        onAddCat={() => setSubView("addcat")}
+        tab={tab}
+        setTab={(t) => { setSubView(null); setTab(t); }}
+      />
+      <div className="desktop-main" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "100dvh" }}>
+        {subContent ? (
+          subContent
+        ) : (
+          <>
+            <Header
+              title={titleMap[tab]}
+              household={household}
+              cats={cats}
+              activeCatId={activeCat.id}
+              onSwitch={setActiveCatId}
+              onAddCat={() => setSubView("addcat")}
             />
-          )}
-          <HighFiveBurst trigger={hi5} color={accentLocal} label={savedToast ? `${savedToast} ✓` : "High five!"} />
-        </>
-      )}
+            <div className="desktop-main-inner" style={{ flex: 1, overflow: "auto" }}>
+              <div className="desktop-content">
+                {tab === "home" && (
+                  <HomeView
+                    cat={activeCat}
+                    logs={logs}
+                    topActivitySlugs={topActivitiesFor(activeCat.id, 6)}
+                    allActivities={allActivities}
+                    iconStyle={settings.iconStyle as "shape" | "mono" | "filled" | "emoji"}
+                    onTile={(slug) => setSheetSlug(slug)}
+                  />
+                )}
+                {tab === "history" && (
+                  <HistoryView
+                    cats={cats}
+                    cat={activeCat}
+                    logs={logs}
+                    iconStyle={settings.iconStyle as "shape" | "mono" | "filled" | "emoji"}
+                  />
+                )}
+                {tab === "profile" && <ProfileView cat={activeCat} logs={logs} />}
+                {tab === "settings" && (
+                  <SettingsView
+                    household={household}
+                    user={currentUser}
+                    memberCount={members.length}
+                    catCount={cats.length}
+                    onAppearance={() => setSubView("appearance")}
+                    onIntegrations={() => setSubView("integrations")}
+                    onMembers={() => setSubView("members")}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="mobile-only">
+              <TabBar tab={tab} setTab={setTab} />
+            </div>
+          </>
+        )}
+        {sheetSlug && (
+          <LogSheet
+            act={BUILTIN_BY_SLUG[sheetSlug]}
+            cat={activeCat}
+            onClose={() => setSheetSlug(null)}
+            onSave={async (entry) => {
+              await logActivityAction({
+                catId: activeCat.id,
+                activitySlug: sheetSlug,
+                ...entry,
+              });
+              setHi5(Date.now());
+              setSavedToast(BUILTIN_BY_SLUG[sheetSlug].label);
+              setTimeout(() => {
+                setSavedToast(null);
+                setHi5(null);
+              }, 1400);
+              setSheetSlug(null);
+            }}
+          />
+        )}
+        <HighFiveBurst trigger={hi5} color={accentLocal} label={savedToast ? `${savedToast} ✓` : "High five!"} />
+      </div>
     </div>
+  );
+}
+
+function DesktopSidebar({
+  household,
+  cats,
+  activeCatId,
+  onSwitch,
+  onAddCat,
+  tab,
+  setTab,
+}: {
+  household: { name: string };
+  cats: CatRow[];
+  activeCatId: string;
+  onSwitch: (id: string) => void;
+  onAddCat: () => void;
+  tab: "home" | "history" | "profile" | "settings";
+  setTab: (t: "home" | "history" | "profile" | "settings") => void;
+}) {
+  const items: { id: "home" | "history" | "profile" | "settings"; label: string }[] = [
+    { id: "home", label: "Log" },
+    { id: "history", label: "History" },
+    { id: "profile", label: "Cat" },
+    { id: "settings", label: "Settings" },
+  ];
+  return (
+    <aside className="desktop-sidebar desktop-only" aria-label="Sidebar">
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink-soft)" }}>
+          <PawMark size={12} color="var(--accent)" />
+          household
+        </div>
+        <div style={{ fontFamily: '"Crimson Pro", Georgia, serif', fontSize: 22, fontWeight: 500, marginTop: 4, lineHeight: 1.1 }}>
+          {household.name}
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink-soft)", marginBottom: 8 }}>cats</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {cats.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => onSwitch(c.id)}
+              style={{
+                appearance: "none",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                borderRadius: 10,
+                border: "none",
+                background: c.id === activeCatId ? "var(--accent-soft)" : "transparent",
+                color: c.id === activeCatId ? "var(--accent)" : "var(--ink)",
+                fontSize: 14,
+                textAlign: "left",
+              }}
+            >
+              <CatAvatar cat={c} size={28} ring={c.id === activeCatId} />
+              <span style={{ fontWeight: c.id === activeCatId ? 600 : 400 }}>{c.name}</span>
+            </button>
+          ))}
+          <button
+            onClick={onAddCat}
+            style={{
+              appearance: "none",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px dashed var(--rule)",
+              background: "transparent",
+              color: "var(--ink-soft)",
+              fontSize: 13,
+              textAlign: "left",
+              marginTop: 4,
+            }}
+          >
+            + Add cat
+          </button>
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink-soft)", marginBottom: 8 }}>navigate</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {items.map((it) => (
+            <button
+              key={it.id}
+              onClick={() => setTab(it.id)}
+              style={{
+                appearance: "none",
+                cursor: "pointer",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "none",
+                background: tab === it.id ? "var(--accent)" : "transparent",
+                color: tab === it.id ? "#fff" : "var(--ink)",
+                fontSize: 14,
+                fontWeight: tab === it.id ? 600 : 400,
+                textAlign: "left",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: tab === it.id ? "#fff" : "var(--rule)",
+                  display: "inline-block",
+                }}
+              />
+              {it.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </aside>
   );
 }
 
@@ -256,6 +405,7 @@ function Header({
 }) {
   return (
     <div
+      className="header-bar"
       style={{
         padding: "14px 18px 10px",
         borderBottom: "1px solid var(--rule-soft)",
@@ -268,6 +418,7 @@ function Header({
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
+            className="mobile-only"
             style={{
               display: "flex",
               alignItems: "center",
@@ -284,6 +435,7 @@ function Header({
             <span>{household.name}</span>
           </div>
           <div
+            className="desktop-headline"
             style={{
               fontFamily: '"Crimson Pro", Georgia, serif',
               fontSize: 28,
@@ -296,7 +448,7 @@ function Header({
             {title}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+        <div className="mobile-only" style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
           {cats.map((c) => (
             <button
               key={c.id}
@@ -364,7 +516,7 @@ function HomeView({
     <div style={{ padding: "14px 16px 96px", display: "flex", flexDirection: "column", gap: 22 }}>
       <section>
         <SectionHd kicker="Quick log" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        <div className="home-quick-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
           {topActivitySlugs.map((slug) => {
             const a = BUILTIN_BY_SLUG[slug];
             if (!a) return null;
@@ -385,7 +537,7 @@ function HomeView({
       {CATEGORIES.map((c) => (
         <section key={c.id}>
           <SectionHd kicker={c.label} />
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          <div className="home-cat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             {(byCat[c.id] || []).map((a) => (
               <Tile key={a.slug} act={a} iconStyle={iconStyle} onClick={() => onTile(a.slug)} small />
             ))}
@@ -743,9 +895,10 @@ function FeedRow({ log, cats, first, scope }: { log: LogRow; cats: CatRow[]; fir
         <div>{fmtTime(log.happenedAt).split(" ").pop()}</div>
         <div style={{ marginTop: 2 }}>{log.createdByLabel ?? ""}</div>
       </div>
-      {(log.photoUrl || log.fileUrl) && (
+      {(log.photos.length + log.files.length) > 0 && (
         <div
           style={{
+            position: "relative",
             width: 28,
             height: 28,
             borderRadius: 6,
@@ -755,9 +908,28 @@ function FeedRow({ log, cats, first, scope }: { log: LogRow; cats: CatRow[]; fir
             justifyContent: "center",
             fontSize: 12,
             color: "var(--ink-soft)",
+            background: log.photos[0] ? `center/cover no-repeat url(${log.photos[0]})` : undefined,
           }}
+          title={`${log.photos.length} photo(s), ${log.files.length} file(s)`}
         >
-          {log.fileUrl ? "📎" : "📷"}
+          {!log.photos[0] && (log.files.length ? "📎" : "📷")}
+          {(log.photos.length + log.files.length) > 1 && (
+            <span
+              style={{
+                position: "absolute",
+                top: -6,
+                right: -6,
+                fontSize: 9,
+                background: "var(--accent)",
+                color: "#fff",
+                borderRadius: 999,
+                padding: "1px 5px",
+                lineHeight: 1.4,
+              }}
+            >
+              +{log.photos.length + log.files.length - 1}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -1312,6 +1484,7 @@ function btnSecondary(borderColor: string, color = "var(--ink)"): React.CSSPrope
 
 function MembersScreen({ household, members, onBack }: { household: { name: string }; members: MemberRow[]; onBack: () => void }) {
   const [pending, start] = useTransition();
+  const [result, setResult] = useState<{ ok: boolean; link?: string; error?: string } | null>(null);
   return (
     <SubScreen title={`${household.name} · members`} onBack={onBack}>
       <div style={{ background: "var(--paper)", borderRadius: 12, marginBottom: 18, boxShadow: "inset 0 0 0 1px var(--rule-soft)" }}>
@@ -1337,7 +1510,15 @@ function MembersScreen({ household, members, onBack }: { household: { name: stri
       </div>
       <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-soft)", marginBottom: 8 }}>Invite</div>
       <form
-        action={(fd) => start(async () => { await inviteMemberAction(fd); window.location.reload(); })}
+        action={(fd) => start(async () => {
+          setResult(null);
+          try {
+            const r = await inviteMemberAction(fd);
+            setResult(r);
+          } catch (e) {
+            setResult({ ok: false, error: e instanceof Error ? e.message : "Failed" });
+          }
+        })}
         style={{ display: "flex", gap: 8 }}
       >
         <input
@@ -1372,18 +1553,93 @@ function MembersScreen({ household, members, onBack }: { household: { name: stri
           {pending ? "…" : "Send"}
         </button>
       </form>
+      {result && result.ok && (
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 13 }}>
+          Invite sent. {result.link && (
+            <span style={{ display: "block", marginTop: 4, fontSize: 11, fontFamily: '"JetBrains Mono", monospace', wordBreak: "break-all", opacity: 0.8 }}>
+              {result.link}
+            </span>
+          )}
+        </div>
+      )}
+      {result && !result.ok && (
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "rgba(220,80,80,.1)", color: "var(--bad)", fontSize: 13 }}>
+          {result.error ?? "Failed"}
+          {result.link && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-dim)" }}>
+              Email didn&apos;t go out, but you can share this link directly:
+              <div style={{ marginTop: 4, fontFamily: '"JetBrains Mono", monospace', wordBreak: "break-all", color: "var(--ink)" }}>{result.link}</div>
+            </div>
+          )}
+        </div>
+      )}
     </SubScreen>
   );
 }
 
 function AddCatScreen({ onBack }: { onBack: () => void }) {
   const [pending, start] = useTransition();
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>();
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  async function uploadPhoto(file: File) {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!res.ok) throw new Error("Upload failed");
+      const j = (await res.json()) as { url: string };
+      setPhotoUrl(j.url);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <SubScreen title="Add cat" onBack={onBack}>
       <form
-        action={(fd) => start(async () => { await addCatAction(fd); window.location.reload(); })}
+        action={(fd) => start(async () => {
+          if (photoUrl) fd.set("photoUrl", photoUrl);
+          await addCatAction(fd);
+          window.location.reload();
+        })}
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 4 }}>
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: "50%",
+              border: "1px dashed var(--rule)",
+              background: photoUrl ? `center/cover no-repeat url(${photoUrl})` : "var(--paper)",
+              color: "var(--ink-soft)",
+              cursor: "pointer",
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            {!photoUrl && (uploading ? "…" : "+ photo")}
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) uploadPhoto(f);
+              e.target.value = "";
+            }}
+          />
+          <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+            Optional profile photo.
+          </div>
+        </div>
         <input name="name" required placeholder="Name" style={inputStyle} />
         <input name="breed" placeholder="Breed" style={inputStyle} />
         <div style={{ display: "flex", gap: 8 }}>

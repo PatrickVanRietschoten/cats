@@ -90,7 +90,7 @@ const TOOLS = [
   },
   {
     name: "log_activity",
-    description: "Record an activity log for a cat. Required: cat_id, activity_slug. Optional: happened_at (ISO), note, data (object).",
+    description: "Record an activity log for a cat. Required: cat_id, activity_slug. Optional: happened_at (ISO), note, data (object), photos (array of URLs), files (array of {url, name}).",
     inputSchema: {
       type: "object",
       properties: {
@@ -99,6 +99,12 @@ const TOOLS = [
         happened_at: { type: "string", description: "ISO 8601; defaults to now." },
         note: { type: "string" },
         data: { type: "object", description: "Activity-specific structured fields, e.g. {amount:'medium',consistency:4}." },
+        photos: { type: "array", items: { type: "string" }, description: "Public photo URLs to attach to this log." },
+        files: {
+          type: "array",
+          items: { type: "object", properties: { url: { type: "string" }, name: { type: "string" } }, required: ["url", "name"] },
+          description: "Files to attach to this log (e.g. vet PDFs).",
+        },
       },
       required: ["cat_id", "activity_slug"],
       additionalProperties: false,
@@ -248,17 +254,26 @@ async function listLogs(ctx: McpContext, args: Record<string, unknown>) {
     if (!Number.isNaN(t)) rows = rows.filter((r) => r.happenedAt.getTime() >= t);
   }
   return {
-    logs: rows.map((l) => ({
-      id: l.id,
-      cat_id: l.catId,
-      activity_slug: l.activitySlug,
-      happened_at: l.happenedAt.toISOString(),
-      note: l.note,
-      data: l.data,
-      photo_url: l.photoUrl,
-      file_url: l.fileUrl,
-      created_by: l.createdByLabel,
-    })),
+    logs: rows.map((l) => {
+      const photos = (l.photos && l.photos.length > 0) ? l.photos : (l.photoUrl ? [l.photoUrl] : []);
+      const files = (l.files && l.files.length > 0)
+        ? l.files
+        : (l.fileUrl ? [{ url: l.fileUrl, name: l.fileName ?? "file" }] : []);
+      return {
+        id: l.id,
+        cat_id: l.catId,
+        activity_slug: l.activitySlug,
+        happened_at: l.happenedAt.toISOString(),
+        note: l.note,
+        data: l.data,
+        photos,
+        files,
+        // legacy single-attachment fields, retained for backwards compatibility
+        photo_url: photos[0] ?? null,
+        file_url: files[0]?.url ?? null,
+        created_by: l.createdByLabel,
+      };
+    }),
   };
 }
 
@@ -282,6 +297,11 @@ async function logActivity(ctx: McpContext, args: Record<string, unknown>) {
   const happenedAt = (args.happened_at as string | undefined) ? new Date(String(args.happened_at)) : new Date();
   if (Number.isNaN(happenedAt.getTime())) throw new Error("Invalid happened_at");
 
+  const photos = Array.isArray(args.photos) ? (args.photos as string[]).filter((s) => typeof s === "string") : [];
+  const files = Array.isArray(args.files)
+    ? (args.files as { url: string; name: string }[]).filter((f) => f && typeof f.url === "string")
+    : [];
+
   const [created] = await db
     .insert(schema.logs)
     .values({
@@ -291,6 +311,11 @@ async function logActivity(ctx: McpContext, args: Record<string, unknown>) {
       happenedAt,
       note: (args.note as string | undefined) ?? null,
       data: (args.data as Record<string, unknown> | undefined) ?? {},
+      photoUrl: photos[0] ?? null,
+      fileUrl: files[0]?.url ?? null,
+      fileName: files[0]?.name ?? null,
+      photos,
+      files,
       createdByLabel: "MCP",
     })
     .returning();

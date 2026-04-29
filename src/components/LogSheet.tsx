@@ -7,9 +7,8 @@ interface SaveEntry {
   happenedAt?: string;
   note?: string;
   data?: Record<string, unknown>;
-  photoUrl?: string;
-  fileUrl?: string;
-  fileName?: string;
+  photos?: string[];
+  files?: { url: string; name: string }[];
 }
 
 interface Props {
@@ -24,42 +23,54 @@ export function LogSheet({ act, cat, onClose, onSave }: Props) {
   const [time, setTime] = useState<"now" | "5m" | "1h" | "custom">("now");
   const [customTime, setCustomTime] = useState("");
   const [note, setNote] = useState("");
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>();
-  const [fileUrl, setFileUrl] = useState<string | undefined>();
-  const [fileName, setFileName] = useState<string | undefined>();
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [files, setFiles] = useState<{ url: string; name: string }[]>([]);
   const [uploading, setUploading] = useState<null | "photo" | "file">(null);
   const [pending, start] = useTransition();
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fields = act.fields ?? ["note"];
+  // Always allow attachments — every activity can have photos/files.
+  const showAttach = true;
 
   function set(k: string, v: string | number) {
     setData((d) => ({ ...d, [k]: v }));
   }
 
-  async function uploadFile(input: HTMLInputElement, kind: "photo" | "file") {
-    const file = input.files?.[0];
-    if (!file) return;
+  async function uploadFiles(input: HTMLInputElement, kind: "photo" | "file") {
+    const fileList = input.files;
+    if (!fileList || fileList.length === 0) return;
     setUploading(kind);
     setUploadError(null);
+    const newPhotos: string[] = [];
+    const newFiles: { url: string; name: string }[] = [];
     try {
-      const fd = new FormData();
-      fd.set("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `Upload failed (${res.status})`);
+      for (const file of Array.from(fileList)) {
+        const fd = new FormData();
+        fd.set("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error ?? `Upload failed (${res.status})`);
+        }
+        const j = (await res.json()) as { url: string; name: string };
+        if (kind === "photo") newPhotos.push(j.url);
+        else newFiles.push({ url: j.url, name: j.name });
       }
-      const j = (await res.json()) as { url: string; name: string };
-      if (kind === "photo") setPhotoUrl(j.url);
-      else {
-        setFileUrl(j.url);
-        setFileName(j.name);
-      }
+      if (newPhotos.length) setPhotos((p) => [...p, ...newPhotos]);
+      if (newFiles.length) setFiles((f) => [...f, ...newFiles]);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(null);
+      input.value = "";
     }
+  }
+
+  function removePhoto(i: number) {
+    setPhotos((p) => p.filter((_, idx) => idx !== i));
+  }
+  function removeFile(i: number) {
+    setFiles((f) => f.filter((_, idx) => idx !== i));
   }
 
   function happenedAtIso(): string {
@@ -79,9 +90,8 @@ export function LogSheet({ act, cat, onClose, onSave }: Props) {
         happenedAt: happenedAtIso(),
         note: note || undefined,
         data,
-        photoUrl,
-        fileUrl,
-        fileName,
+        photos,
+        files,
       });
     });
   }
@@ -317,31 +327,75 @@ export function LogSheet({ act, cat, onClose, onSave }: Props) {
           />
         </Row>
 
-        {(fields.includes("photo") || fields.includes("file")) && (
-          <Row label="Attach">
+        {showAttach && (
+          <Row label="Attach" hint={photos.length + files.length > 0 ? `${photos.length + files.length} attached` : undefined}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {fields.includes("photo") && (
-                <label style={attachBtn}>
-                  {uploading === "photo" ? "Uploading…" : photoUrl ? "✓ Photo" : "📷 Photo"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    onChange={(e) => uploadFile(e.target, "photo")}
-                  />
-                </label>
-              )}
-              {fields.includes("file") && (
-                <label style={attachBtn}>
-                  {uploading === "file" ? "Uploading…" : fileUrl ? `✓ ${fileName}` : "📎 File"}
-                  <input
-                    type="file"
-                    style={{ display: "none" }}
-                    onChange={(e) => uploadFile(e.target, "file")}
-                  />
-                </label>
-              )}
+              <label style={attachBtn}>
+                {uploading === "photo" ? "Uploading…" : `📷 ${photos.length ? "Add photo" : "Photo"}`}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => uploadFiles(e.target, "photo")}
+                />
+              </label>
+              <label style={attachBtn}>
+                {uploading === "file" ? "Uploading…" : `📎 ${files.length ? "Add file" : "File"}`}
+                <input
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => uploadFiles(e.target, "file")}
+                />
+              </label>
             </div>
+            {photos.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))", gap: 6, marginTop: 8 }}>
+                {photos.map((p, i) => (
+                  <div key={i} style={{ position: "relative", paddingBottom: "100%", borderRadius: 8, overflow: "hidden", background: `center/cover no-repeat url(${p})` }}>
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(i)}
+                      aria-label="Remove"
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        right: 4,
+                        width: 22,
+                        height: 22,
+                        borderRadius: 999,
+                        border: "none",
+                        background: "rgba(0,0,0,0.6)",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        lineHeight: 1,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {files.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                {files.map((f, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", border: "1px solid var(--rule)", borderRadius: 8, fontSize: 13 }}>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {f.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      aria-label="Remove"
+                      style={{ appearance: "none", border: "none", background: "transparent", color: "var(--ink-soft)", cursor: "pointer", fontSize: 16 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {uploadError && <div style={{ color: "var(--bad)", fontSize: 12, marginTop: 6 }}>{uploadError}</div>}
           </Row>
         )}

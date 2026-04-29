@@ -52,18 +52,23 @@ export default async function HomePage() {
         color: c.color,
         photoUrl: c.photoUrl,
       }))}
-      logs={logs.map((l) => ({
-        id: l.id,
-        catId: l.catId,
-        activitySlug: l.activitySlug,
-        happenedAt: l.happenedAt.toISOString(),
-        note: l.note,
-        data: l.data,
-        photoUrl: l.photoUrl,
-        fileUrl: l.fileUrl,
-        fileName: l.fileName,
-        createdByLabel: l.createdByLabel,
-      }))}
+      logs={logs.map((l) => {
+        const photos = (l.photos && l.photos.length > 0) ? l.photos : (l.photoUrl ? [l.photoUrl] : []);
+        const files = (l.files && l.files.length > 0)
+          ? l.files
+          : (l.fileUrl ? [{ url: l.fileUrl, name: l.fileName ?? "file" }] : []);
+        return {
+          id: l.id,
+          catId: l.catId,
+          activitySlug: l.activitySlug,
+          happenedAt: l.happenedAt.toISOString(),
+          note: l.note,
+          data: l.data,
+          photos,
+          files,
+          createdByLabel: l.createdByLabel,
+        };
+      })}
       settings={settings[0] ?? { accent: "#5f4b21", themeMode: "auto", density: "regular", iconStyle: "shape" }}
       mcpTokens={mcpTokens.map((t) => ({
         id: t.id,

@@ -1,11 +1,20 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { db, schema } from "@/db";
 import { and, desc, eq } from "drizzle-orm";
 import { destroySession, requireUser } from "@/lib/auth";
 import { createHouseholdForUser, getActiveHousehold } from "@/lib/household";
 import { newToken } from "@/lib/auth";
+
+async function appBaseUrl(): Promise<string> {
+  if (process.env.APP_URL) return process.env.APP_URL;
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  const proto = h.get("x-forwarded-proto") ?? (host?.startsWith("localhost") ? "http" : "https");
+  return host ? `${proto}://${host}` : "http://localhost:3344";
+}
 
 async function getCtx() {
   const user = await requireUser();
@@ -14,20 +23,60 @@ async function getCtx() {
   return { user, hh };
 }
 
-export async function createHouseholdAction(name: string, catName: string, catWeight?: number, catBreed?: string) {
+export async function createHouseholdAction(input: {
+  name: string;
+  catName: string;
+  catWeight?: number;
+  catBreed?: string;
+  catBorn?: string;
+  catSex?: string;
+  catIndoor?: boolean;
+  catPhotoUrl?: string;
+}) {
   const user = await requireUser();
-  const safeName = name?.trim() || `${user.email.split("@")[0]} household`;
+  const safeName = input.name?.trim() || `${user.email.split("@")[0]} household`;
   const hh = await createHouseholdForUser(user.id, safeName);
-  if (catName?.trim()) {
+  if (input.catName?.trim()) {
     await db.insert(schema.cats).values({
       householdId: hh.id,
-      name: catName.trim(),
-      weightKg: catWeight && Number.isFinite(catWeight) ? catWeight : null,
-      breed: catBreed?.trim() || null,
-      color: pickColor(catName),
+      name: input.catName.trim(),
+      weightKg: input.catWeight && Number.isFinite(input.catWeight) ? input.catWeight : null,
+      breed: input.catBreed?.trim() || null,
+      born: input.catBorn?.trim() || null,
+      sex: input.catSex?.trim() || null,
+      indoor: input.catIndoor ?? true,
+      photoUrl: input.catPhotoUrl?.trim() || null,
+      color: pickColor(input.catName),
     });
   }
-  revalidatePath("/");
+  // Onboarding does its own reload at "Done" — skipping revalidate here keeps
+  // the multi-cat onboarding loop alive across cats.
+}
+
+export async function addCatToHouseholdAction(input: {
+  name: string;
+  breed?: string;
+  weightKg?: number;
+  born?: string;
+  sex?: string;
+  indoor?: boolean;
+  photoUrl?: string;
+}) {
+  const { hh } = await getCtx();
+  const name = input.name.trim();
+  if (!name) return;
+  await db.insert(schema.cats).values({
+    householdId: hh.id,
+    name,
+    breed: input.breed?.trim() || null,
+    weightKg: input.weightKg && Number.isFinite(input.weightKg) ? input.weightKg : null,
+    born: input.born?.trim() || null,
+    sex: input.sex?.trim() || null,
+    indoor: input.indoor ?? true,
+    photoUrl: input.photoUrl?.trim() || null,
+    color: pickColor(name),
+  });
+  // No revalidate — onboarding loop reloads explicitly at Done.
 }
 
 function pickColor(seed: string): string {
@@ -56,6 +105,7 @@ export async function addCatAction(form: FormData) {
     born: String(form.get("born") ?? "").trim() || null,
     sex: String(form.get("sex") ?? "").trim() || null,
     indoor: form.get("indoor") === "on" || form.get("indoor") === "true",
+    photoUrl: String(form.get("photoUrl") ?? "").trim() || null,
     color: pickColor(name),
   });
   revalidatePath("/");
@@ -91,9 +141,8 @@ export async function logActivityAction(input: {
   happenedAt?: string;
   note?: string;
   data?: Record<string, unknown>;
-  photoUrl?: string;
-  fileUrl?: string;
-  fileName?: string;
+  photos?: string[];
+  files?: { url: string; name: string }[];
 }) {
   const { user, hh } = await getCtx();
   const cat = await db
@@ -102,6 +151,8 @@ export async function logActivityAction(input: {
     .where(and(eq(schema.cats.id, input.catId), eq(schema.cats.householdId, hh.id)))
     .limit(1);
   if (!cat[0]) throw new Error("Cat not found");
+  const photos = input.photos ?? [];
+  const files = input.files ?? [];
   await db.insert(schema.logs).values({
     householdId: hh.id,
     catId: input.catId,
@@ -109,9 +160,11 @@ export async function logActivityAction(input: {
     happenedAt: input.happenedAt ? new Date(input.happenedAt) : new Date(),
     note: input.note || null,
     data: input.data ?? {},
-    photoUrl: input.photoUrl || null,
-    fileUrl: input.fileUrl || null,
-    fileName: input.fileName || null,
+    photoUrl: photos[0] ?? null,
+    fileUrl: files[0]?.url ?? null,
+    fileName: files[0]?.name ?? null,
+    photos,
+    files,
     createdById: user.id,
     createdByLabel: user.name ?? user.email.split("@")[0],
   });
@@ -158,10 +211,10 @@ export async function revokeMcpTokenAction(id: string) {
   revalidatePath("/");
 }
 
-export async function inviteMemberAction(form: FormData) {
+export async function inviteMemberAction(form: FormData): Promise<{ ok: boolean; link?: string; error?: string }> {
   const { user, hh } = await getCtx();
   const email = String(form.get("email") ?? "").trim().toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(email)) return;
+  if (!/^\S+@\S+\.\S+$/.test(email)) return { ok: false, error: "Invalid email" };
   const token = newToken(20);
   await db.insert(schema.invites).values({
     householdId: hh.id,
@@ -169,17 +222,24 @@ export async function inviteMemberAction(form: FormData) {
     token,
     invitedBy: user.id,
   });
-  // Send email with the invite link
-  const { sendMail } = await import("@/lib/mail");
-  const base = process.env.APP_URL ?? "http://localhost:3344";
+  const base = await appBaseUrl();
   const link = `${base}/invite/${token}`;
-  await sendMail({
-    to: email,
-    subject: `${user.name ?? user.email} invited you to ${hh.name} on Cat Tracker`,
-    text: `Accept the invite: ${link}`,
-    html: `<p>${user.name ?? user.email} invited you to join <b>${hh.name}</b> on Cat Tracker.</p><p><a href="${link}" style="background:#5f4b21;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-family:system-ui">Accept invite</a></p>`,
-  });
+  // Best-effort email send — never fail the whole action because Mailgun is down.
+  try {
+    const { sendMail } = await import("@/lib/mail");
+    await sendMail({
+      to: email,
+      subject: `${user.name ?? user.email} invited you to ${hh.name} on Cat Tracker`,
+      text: `Accept the invite: ${link}`,
+      html: `<p>${user.name ?? user.email} invited you to join <b>${hh.name}</b> on Cat Tracker.</p><p><a href="${link}" style="background:#5f4b21;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-family:system-ui">Accept invite</a></p>`,
+    });
+  } catch (e) {
+    console.error("inviteMemberAction: sendMail failed", e);
+    revalidatePath("/");
+    return { ok: false, link, error: e instanceof Error ? e.message : "Email failed to send" };
+  }
   revalidatePath("/");
+  return { ok: true, link };
 }
 
 export async function signoutAction() {
